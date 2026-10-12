@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Treemap Hierarchical Data Visualizer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
+  .treemap-rect { cursor: pointer; transition: opacity 0.15s; stroke: #0f172a; stroke-width: 2; }
+  .treemap-rect:hover { opacity: 0.85; stroke-width: 3; stroke: #fff; }
+  .treemap-label { pointer-events: none; font-size: 11px; fill: rgba(255,255,255,0.9); font-weight: 600; }
+  .treemap-sublabel { pointer-events: none; font-size: 9px; fill: rgba(255,255,255,0.6); }
+  .tooltip { position: absolute; background: rgba(15,23,42,0.95); border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; font-size: 12px; pointer-events: none; display: none; z-index: 100; }
+  textarea { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; font-family: monospace; font-size: 12px; }
+  select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; }
+  .breadcrumb-btn { background: #1e3a5f; border: 1px solid #3b82f6; color: #93c5fd; border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+  .breadcrumb-btn:hover { background: #1e40af; }
+</style>
+</head>
+<body class="min-h-screen p-4">
+<div class="max-w-5xl mx-auto">
+  <h1 class="text-2xl font-bold text-blue-300 mb-1">Treemap Visualizer</h1>
+  <p class="text-slate-500 text-sm mb-3">Squarified treemap — click cells to drill down</p>
+
+  <div class="flex gap-3 mb-3 flex-wrap items-center">
+    <label for="datasetSelect" class="text-slate-400 text-sm">Dataset:</label>
+    <select id="datasetSelect" onchange="loadDataset()" aria-label="Select dataset">
+      <option value="population">World Population</option>
+      <option value="filesystem">File System Mock</option>
+      <option value="budget">Budget Categories</option>
+    </select>
+    <button onclick="showCustom()" class="text-sm bg-slate-700 hover:bg-slate-600 border border-slate-500 text-slate-300 px-3 py-1 rounded" aria-label="Enter custom JSON">Custom JSON</button>
+  </div>
+
+  <!-- Breadcrumb -->
+  <div id="breadcrumb" class="flex items-center gap-1 mb-3 flex-wrap"></div>
+
+  <!-- Treemap SVG -->
+  <div class="relative">
+    <svg id="treemapSvg" width="900" height="520" aria-label="Treemap visualization"></svg>
+    <div id="tooltip" class="tooltip" role="tooltip"></div>
+  </div>
+
+  <!-- Custom JSON panel -->
+  <div id="customPanel" class="hidden mt-4">
+    <div class="text-slate-400 text-sm mb-1">Paste JSON (format: <code class="text-blue-300">[{"name":"A","value":100,"children":[...]}]</code>)</div>
+    <textarea id="customJson" rows="5" class="w-full p-2" aria-label="Custom JSON data" placeholder='[{"name":"Root","children":[{"name":"A","value":40},{"name":"B","value":60}]}]'></textarea>
+    <button onclick="applyCustom()" class="mt-2 bg-blue-700 hover:bg-blue-600 text-white px-4 py-1 rounded text-sm" aria-label="Apply custom data">Apply</button>
+    <span id="jsonError" class="text-red-400 text-sm ml-3"></span>
+  </div>
+</div>
+
+<script>
+function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+const DATASETS = {
+  population: {
+    name: 'World Population',
+    children: [
+      { name: 'Asia', children: [
+        { name: 'China', value: 1412 }, { name: 'India', value: 1380 }, { name: 'Indonesia', value: 274 },
+        { name: 'Pakistan', value: 225 }, { name: 'Bangladesh', value: 167 }, { name: 'Japan', value: 126 },
+        { name: 'Philippines', value: 113 }, { name: 'Vietnam', value: 97 }
+      ]},
+      { name: 'Africa', children: [
+        { name: 'Nigeria', value: 218 }, { name: 'Ethiopia', value: 123 }, { name: 'Egypt', value: 104 },
+        { name: 'DRC', value: 100 }, { name: 'Tanzania', value: 65 }, { name: 'Kenya', value: 55 }
+      ]},
+      { name: 'Europe', children: [
+        { name: 'Russia', value: 144 }, { name: 'Germany', value: 84 }, { name: 'France', value: 68 },
+        { name: 'UK', value: 67 }, { name: 'Italy', value: 60 }, { name: 'Spain', value: 47 }
+      ]},
+      { name: 'Americas', children: [
+        { name: 'USA', value: 332 }, { name: 'Brazil', value: 214 }, { name: 'Mexico', value: 130 },
+        { name: 'Colombia', value: 51 }, { name: 'Argentina', value: 45 }, { name: 'Canada', value: 38 }
+      ]},
+      { name: 'Oceania', children: [
+        { name: 'Australia', value: 26 }, { name: 'New Zealand', value: 5 }, { name: 'Papua NG', value: 9 }
+      ]}
+    ]
+  },
+  filesystem: {
+    name: 'root',
+    children: [
+      { name: 'src', children: [
+        { name: 'components', children: [
+          { name: 'App.tsx', value: 48 }, { name: 'Header.tsx', value: 22 },
+          { name: 'Modal.tsx', value: 35 }, { name: 'Button.tsx', value: 12 }
+        ]},
+        { name: 'utils', children: [
+          { name: 'api.ts', value: 56 }, { name: 'helpers.ts', value: 28 }, { name: 'types.ts', value: 18 }
+        ]},
+        { name: 'index.ts', value: 8 }
+      ]},
+      { name: 'public', children: [
+        { name: 'images', children: [
+          { name: 'hero.png', value: 420 }, { name: 'logo.svg', value: 12 }, { name: 'bg.jpg', value: 280 }
+        ]},
+        { name: 'fonts', children: [
+          { name: 'inter.woff2', value: 156 }, { name: 'mono.woff2', value: 88 }
+        ]}
+      ]},
+      { name: 'node_modules', children: [
+        { name: 'react', value: 1200 }, { name: 'tailwindcss', value: 800 },
+        { name: 'typescript', value: 600 }, { name: 'vite', value: 450 }
+      ]},
+      { name: 'package.json', value: 3 }, { name: 'tsconfig.json', value: 2 }
+    ]
+  },
+  budget: {
+    name: 'Annual Budget',
+    children: [
+      { name: 'Personnel', children: [
+        { name: 'Salaries', value: 520 }, { name: 'Benefits', value: 130 }, { name: 'Training', value: 45 }
+      ]},
+      { name: 'Technology', children: [
+        { name: 'Cloud Infra', value: 180 }, { name: 'Software Licenses', value: 95 },
+        { name: 'Hardware', value: 60 }, { name: 'Security', value: 40 }
+      ]},
+      { name: 'Marketing', children: [
+        { name: 'Digital Ads', value: 210 }, { name: 'Events', value: 85 },
+        { name: 'Content', value: 55 }, { name: 'PR', value: 30 }
+      ]},
+      { name: 'Operations', children: [
+        { name: 'Rent', value: 120 }, { name: 'Utilities', value: 35 },
+        { name: 'Travel', value: 50 }, { name: 'Legal', value: 45 }
+      ]},
+      { name: 'R&D', children: [
+        { name: 'Research', value: 160 }, { name: 'Prototypes', value: 75 }, { name: 'Patents', value: 25 }
+      ]}
+    ]
+  }
+};
+
+const TOP_COLORS = [
+  '#1d4ed8','#065f46','#92400e','#6b21a8','#9f1239','#0f766e','#1e3a5f','#713f12'
+];
+
+let rootData = null;
+let currentNode = null;
+let breadcrumbStack = [];
+let colorMap = {};
+
+function sumValue(node) {
+  if (node.value) return node.value;
+  if (node.children) return node.children.reduce((s, c) => s + sumValue(c), 0);
+  return 0;
+}
+
+function flattenWithValues(node) {
+  const v = sumValue(node);
+  return { ...node, _value: v };
+}
+
+function squarify(items, rect) {
+  // Squarified treemap algorithm
+  const rects = [];
+  let remaining = [...items].sort((a, b) => b._value - a._value);
+  let x = rect.x, y = rect.y, w = rect.w, h = rect.h;
+
+  while (remaining.length > 0) {
+    const totalVal = remaining.reduce((s, i) => s + i._value, 0);
+    const short = Math.min(w, h);
+    let row = [];
+    let rowVal = 0;
+    let bestRatio = Infinity;
+
+    for (let i = 0; i < remaining.length; i++) {
+      row.push(remaining[i]);
+      rowVal += remaining[i]._value;
+      const ratio = worstRatio(row, rowVal, short, totalVal, w, h);
+      if (ratio > bestRatio) { row.pop(); rowVal -= remaining[i]._value; break; }
+      bestRatio = ratio;
+    }
+    if (row.length === 0) { row.push(remaining[0]); rowVal = remaining[0]._value; }
+
+    // Layout row
+    const rowFrac = rowVal / totalVal;
+    if (w <= h) {
+      const rowH = h * rowFrac;
+      let cx = x;
+      row.forEach(item => {
+        const cw = (item._value / rowVal) * w;
+        rects.push({ node: item, x: cx, y, w: cw, h: rowH });
+        cx += cw;
+      });
+      y += rowH; h -= rowH;
+    } else {
+      const rowW = w * rowFrac;
+      let cy = y;
+      row.forEach(item => {
+        const ch = (item._value / rowVal) * h;
+        rects.push({ node: item, x, y: cy, w: rowW, h: ch });
+        cy += ch;
+      });
+      x += rowW; w -= rowW;
+    }
+    remaining = remaining.filter(i => !row.includes(i));
+  }
+  return rects;
+}
+
+function worstRatio(row, rowVal, short, totalVal, W, H) {
+  const area = short * short * (rowVal / totalVal) * (W <= H ? W : H);
+  let worst = 0;
+  row.forEach(item => {
+    const a = (item._value / rowVal) * area;
+    const ratio = Math.max(short * short * (item._value / rowVal) / area, area / (short * short * (item._value / rowVal)));
+    worst = Math.max(worst, ratio);
+  });
+  return worst;
+}
+
+function assignColors(node, topColor) {
+  colorMap[node.name] = topColor;
+  if (node.children) node.children.forEach(c => assignColors(c, topColor));
+}
+
+function loadDataset() {
+  const name = document.getElementById('datasetSelect').value;
+  rootData = JSON.parse(JSON.stringify(DATASETS[name]));
+  // Assign top-level colors
+  colorMap = {};
+  if (rootData.children) {
+    rootData.children.forEach((c, i) => assignColors(c, TOP_COLORS[i % TOP_COLORS.length]));
+  }
+  breadcrumbStack = [rootData];
+  currentNode = rootData;
+  render();
+}
+
+function drillDown(node) {
+  if (!node.children || node.children.length === 0) return;
+  breadcrumbStack.push(node);
+  currentNode = node;
+  render();
+}
+
+function navigateTo(idx) {
+  breadcrumbStack = breadcrumbStack.slice(0, idx + 1);
+  currentNode = breadcrumbStack[breadcrumbStack.length - 1];
+  render();
+}
+
+function render() {
+  const svg = document.getElementById('treemapSvg');
+  const W = parseInt(svg.getAttribute('width'));
+  const H = parseInt(svg.getAttribute('height'));
+
+  // Breadcrumb
+  const bc = document.getElementById('breadcrumb');
+  bc.innerHTML = breadcrumbStack.map((n, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'breadcrumb-btn';
+    btn.textContent = n.name || 'Root';
+    btn.setAttribute('aria-label', 'Navigate to ' + (n.name || 'Root'));
+    btn.onclick = () => navigateTo(i);
+    return btn.outerHTML + (i < breadcrumbStack.length - 1 ? '<span class="text-slate-600 mx-1">›</span>' : '');
+  }).join('');
+
+  // Build items for current node
+  const items = (currentNode.children || []).map(c => flattenWithValues(c));
+  const totalVal = items.reduce((s, i) => s + i._value, 0);
+
+  const rects = squarify(items, { x: 0, y: 0, w: W, h: H });
+
+  let html = '';
+  rects.forEach(({ node, x, y, w, h }) => {
+    if (w < 1 || h < 1) return;
+    const color = colorMap[node.name] || '#334155';
+    const pct = totalVal > 0 ? ((node._value / totalVal) * 100).toFixed(1) : 0;
+    const hasChildren = node.children && node.children.length > 0;
+    const cursor = hasChildren ? 'pointer' : 'default';
+    const labelX = x + w / 2;
+    const labelY = y + h / 2;
+    const showLabel = w > 30 && h > 20;
+    const showSub = w > 50 && h > 36;
+
+    html += `<rect class="treemap-rect" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" style="cursor:${cursor}"
+      data-name="${escapeHtml(node.name)}" data-val="${node._value}" data-pct="${pct}" data-haschildren="${hasChildren}"/>`;
+    if (showLabel) {
+      const maxChars = Math.floor(w / 7);
+      const label = node.name.length > maxChars ? node.name.slice(0, maxChars - 1) + '…' : node.name;
+      html += `<text class="treemap-label" x="${labelX.toFixed(1)}" y="${(labelY - (showSub?5:0)).toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(label)}</text>`;
+    }
+    if (showSub) {
+      html += `<text class="treemap-sublabel" x="${labelX.toFixed(1)}" y="${(labelY + 12).toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${pct}%</text>`;
+    }
+  });
+  svg.innerHTML = html;
+
+  // Click handlers
+  svg.querySelectorAll('.treemap-rect').forEach((rect, i) => {
+    rect.addEventListener('click', () => {
+      const node = (currentNode.children || [])[i];
+      if (node) drillDown(node);
+    });
+    rect.addEventListener('mouseenter', (e) => {
+      const tt = document.getElementById('tooltip');
+      const pct = rect.dataset.pct;
+      const parent = currentNode.name || 'Root';
+      tt.innerHTML = `<strong>${escapeHtml(rect.dataset.name)}</strong><br>Value: ${parseInt(rect.dataset.val).toLocaleString()}<br>${pct}% of ${escapeHtml(parent)}${rect.dataset.haschildren==='true'?' · Click to drill down':''}`;
+      tt.style.display = 'block';
+    });
+    rect.addEventListener('mousemove', (e) => {
+      const tt = document.getElementById('tooltip');
+      const svgRect = svg.getBoundingClientRect();
+      tt.style.left = (e.clientX - svgRect.left + 12) + 'px';
+      tt.style.top = (e.clientY - svgRect.top - 10) + 'px';
+    });
+    rect.addEventListener('mouseleave', () => {
+      document.getElementById('tooltip').style.display = 'none';
+    });
+  });
+}
+
+function showCustom() {
+  const p = document.getElementById('customPanel');
+  p.classList.toggle('hidden');
+}
+
+function applyCustom() {
+  const raw = document.getElementById('customJson').value.trim();
+  try {
+    let data = JSON.parse(raw);
+    if (Array.isArray(data)) data = { name: 'Root', children: data };
+    rootData = data;
+    colorMap = {};
+    if (rootData.children) rootData.children.forEach((c, i) => assignColors(c, TOP_COLORS[i % TOP_COLORS.length]));
+    breadcrumbStack = [rootData]; currentNode = rootData;
+    document.getElementById('jsonError').textContent = '';
+    render();
+  } catch(e) {
+    document.getElementById('jsonError').textContent = 'Invalid JSON: ' + e.message;
+  }
+}
+
+loadDataset();
+</script>
+</body>
+</html>
